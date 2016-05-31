@@ -948,6 +948,8 @@ object MiMa extends AutoPlugin {
         ProblemFilters.exclude[DirectMissingMethodProblem]("akka.cluster.singleton.ClusterSingletonManager.selfAddressOption")
       ),
       "2.4.9" -> Seq(
+        // #21131 new implementation for Akka Typed
+        ProblemFilters.exclude[ReversedMissingMethodProblem]("akka.actor.dungeon.DeathWatch.isWatching")
       )
     )
   }
