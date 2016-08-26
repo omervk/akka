@@ -25,13 +25,13 @@ object ActorSystemImpl {
   import ScalaDSL._
 
   sealed trait SystemCommand
-  case class CreateSystemActor[T](props: Props[T])(val replyTo: ActorRef[ActorRef[T]]) extends SystemCommand
+  case class CreateSystemActor[T](behavior: Behavior[T])(val replyTo: ActorRef[ActorRef[T]]) extends SystemCommand
 
   val systemGuardianBehavior: Behavior[SystemCommand] =
     ContextAware { ctx ⇒
       Static {
         case create: CreateSystemActor[t] ⇒
-          create.replyTo ! ctx.spawnAnonymous(create.props)
+          create.replyTo ! ctx.spawnAnonymous(create.behavior)
       }
     }
 }
@@ -63,11 +63,11 @@ Distributed Data:
  */
 
 private[typed] class ActorSystemImpl[-T](
-  override val name:  String,
-  _config:            Config,
-  _cl:                ClassLoader,
-  _ec:                Option[ExecutionContext],
-  _userGuardianProps: Props[T])
+  override val name:     String,
+  _config:               Config,
+  _cl:                   ClassLoader,
+  _ec:                   Option[ExecutionContext],
+  _userGuardianBehavior: Behavior[T])
   extends ActorRef[T](a.RootActorPath(a.Address("akka", name)) / "user") with ActorSystem[T] with ActorRefImpl[T] {
 
   import ActorSystemImpl._
@@ -182,8 +182,8 @@ private[typed] class ActorSystemImpl[-T](
       override def isLocal: Boolean = true
     }
 
-  private def createTopLevel[U](props: Props[U], name: String): ActorRefImpl[U] = {
-    val cell = new ActorCell(this, props, theOneWhoWalksTheBubblesOfSpaceTime)
+  private def createTopLevel[U](behavior: Behavior[U], name: String): ActorRefImpl[U] = {
+    val cell = new ActorCell(this, behavior, executionContext, 1000, theOneWhoWalksTheBubblesOfSpaceTime)
     val ref = new LocalActorRef(rootPath / name, cell)
     cell.setSelf(ref)
     topLevelActors.add(ref)
@@ -191,8 +191,8 @@ private[typed] class ActorSystemImpl[-T](
     ref
   }
 
-  private val systemGuardian: ActorRefImpl[SystemCommand] = createTopLevel(Props(systemGuardianBehavior), "system")
-  private val userGuardian: ActorRefImpl[T] = createTopLevel(_userGuardianProps, "user")
+  private val systemGuardian: ActorRefImpl[SystemCommand] = createTopLevel(systemGuardianBehavior, "system")
+  private val userGuardian: ActorRefImpl[T] = createTopLevel(_userGuardianBehavior, "user")
 
   override def terminate(): Future[Terminated] = {
     theOneWhoWalksTheBubblesOfSpaceTime.sendSystem(Terminate())
@@ -217,10 +217,10 @@ private[typed] class ActorSystemImpl[-T](
   override def sendSystem(msg: SystemMessage): Unit = userGuardian.sendSystem(msg)
   override def isLocal: Boolean = true
 
-  def systemActorOf[U](props: Props[U], name: String)(implicit timeout: Timeout): Future[ActorRef[U]] = {
+  def systemActorOf[U](behavior: Behavior[U], name: String)(implicit timeout: Timeout): Future[ActorRef[U]] = {
     import AskPattern._
     implicit val sched = scheduler
-    systemGuardian ? CreateSystemActor(props)
+    systemGuardian ? CreateSystemActor(behavior)
   }
 
   def printTree: String = {
