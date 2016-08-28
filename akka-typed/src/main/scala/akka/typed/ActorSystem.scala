@@ -3,13 +3,13 @@
  */
 package akka.typed
 
-import akka.event.{ LoggingFilter, LoggingAdapter, EventStream }
 import scala.concurrent.ExecutionContext
-import akka.{ actor ⇒ a }
+import akka.{ actor ⇒ a, event => e }
 import java.util.concurrent.ThreadFactory
 import com.typesafe.config.{ Config, ConfigFactory }
 import scala.concurrent.{ ExecutionContextExecutor, Future }
 import akka.typed.adapter.{ PropsAdapter, ActorSystemAdapter }
+import akka.util.Timeout
 
 /**
  * An ActorSystem is home to a hierarchy of Actors. It is created using
@@ -36,8 +36,8 @@ trait ActorSystem[-T] extends ActorRef[T] { this: internal.ActorRefImpl[T] ⇒
    */
   def logConfiguration(): Unit
 
-  def logFilter: LoggingFilter
-  def log: LoggingAdapter
+  def logFilter: e.LoggingFilter
+  def log: e.LoggingAdapter
 
   /**
    * Start-up time in milliseconds since the epoch.
@@ -110,6 +110,8 @@ trait ActorSystem[-T] extends ActorRef[T] { this: internal.ActorRefImpl[T] ⇒
    * The format of the string is subject to change, i.e. no stable “API”.
    */
   def printTree: String
+
+  def systemActorOf[U](behavior: Behavior[U], name: String, dispatcher: DispatcherSelector, mailboxCapacity: Int)(implicit timeout: Timeout): Future[ActorRef[U]]
 }
 
 object ActorSystem {
@@ -121,8 +123,8 @@ object ActorSystem {
    * [[akka.actor.Actor]] instances.
    */
   def apply[T](name: String, guardianBehavior: Behavior[T],
-               config:           Option[Config]           = None,
-               classLoader:      Option[ClassLoader]      = None,
+               config: Option[Config] = None,
+               classLoader: Option[ClassLoader] = None,
                executionContext: Option[ExecutionContext] = None): ActorSystem[T] = {
     Behavior.validateAsInitial(guardianBehavior)
     val cl = classLoader.getOrElse(akka.actor.ActorSystem.findClassLoader())
@@ -136,8 +138,8 @@ object ActorSystem {
    * system typed and untyped actors can coexist.
    */
   def adapter[T](name: String, guardianBehavior: Behavior[T],
-                 config:           Option[Config]           = None,
-                 classLoader:      Option[ClassLoader]      = None,
+                 config: Option[Config] = None,
+                 classLoader: Option[ClassLoader] = None,
                  executionContext: Option[ExecutionContext] = None): ActorSystem[T] = {
     Behavior.validateAsInitial(guardianBehavior)
     val cl = classLoader.getOrElse(akka.actor.ActorSystem.findClassLoader())

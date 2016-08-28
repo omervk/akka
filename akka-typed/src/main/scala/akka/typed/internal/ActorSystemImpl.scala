@@ -20,18 +20,19 @@ import scala.collection.JavaConverters._
 import scala.util.Success
 import akka.util.Timeout
 import java.io.Closeable
+import java.util.concurrent.atomic.AtomicInteger
 
 object ActorSystemImpl {
   import ScalaDSL._
 
   sealed trait SystemCommand
-  case class CreateSystemActor[T](behavior: Behavior[T])(val replyTo: ActorRef[ActorRef[T]]) extends SystemCommand
+  case class CreateSystemActor[T](behavior: Behavior[T], dispatcher: DispatcherSelector, mailboxCapacity: Int)(val replyTo: ActorRef[ActorRef[T]]) extends SystemCommand
 
   val systemGuardianBehavior: Behavior[SystemCommand] =
     ContextAware { ctx ⇒
       Static {
         case create: CreateSystemActor[t] ⇒
-          create.replyTo ! ctx.spawnAnonymous(create.behavior)
+          create.replyTo ! ctx.spawnAnonymous(create.behavior, create.dispatcher, create.mailboxCapacity)
       }
     }
 }
@@ -63,12 +64,12 @@ Distributed Data:
  */
 
 private[typed] class ActorSystemImpl[-T](
-  override val name:     String,
-  _config:               Config,
-  _cl:                   ClassLoader,
-  _ec:                   Option[ExecutionContext],
+  override val name: String,
+  _config: Config,
+  _cl: ClassLoader,
+  _ec: Option[ExecutionContext],
   _userGuardianBehavior: Behavior[T])
-  extends ActorRef[T](a.RootActorPath(a.Address("akka", name)) / "user") with ActorSystem[T] with ActorRefImpl[T] {
+    extends ActorRef[T](a.RootActorPath(a.Address("akka", name)) / "user") with ActorSystem[T] with ActorRefImpl[T] {
 
   import ActorSystemImpl._
 
@@ -115,17 +116,18 @@ private[typed] class ActorSystemImpl[-T](
 
   override val dynamicAccess: a.DynamicAccess = new a.ReflectiveDynamicAccess(_cl)
 
+  private val loggerIds = new AtomicInteger
+  def loggerId(): Int = loggerIds.incrementAndGet()
+
   // this provides basic logging (to stdout) until .start() is called below
-  // FIXME!!!
-  private val untypedSystem = a.ActorSystem(name + "-untyped", _config)
-  override def eventStream = untypedSystem.eventStream
+  override val eventStream = new EventStreamImpl(settings.DebugEventStream)(settings.LoggerStartTimeout)
 
   override val logFilter: e.LoggingFilter = {
     val arguments = Vector(classOf[Settings] → settings, classOf[e.EventStream] → eventStream)
     dynamicAccess.createInstanceFor[e.LoggingFilter](settings.LoggingFilter, arguments).get
   }
 
-  override val log: e.LoggingAdapter = new e.BusLogging(eventStream, getClass.getName + "(" + name + ")", this.getClass, logFilter)
+  override val log: e.LoggingAdapter = ??? // new e.BusLogging(eventStream, getClass.getName + "(" + name + ")", this.getClass, logFilter)
 
   /**
    * Create the scheduler service. This one needs one special behavior: if
@@ -173,7 +175,6 @@ private[typed] class ActorSystemImpl[-T](
             if (terminationPromise.tryComplete(Success(Terminated(this)(null)))) {
               closeScheduler()
               dispatchers.shutdown()
-              untypedSystem.terminate()
             }
           } else if (terminateTriggered.compareAndSet(false, true))
             topLevelActors.asScala.foreach(ref ⇒ ref.sendSystem(Terminate()))
@@ -217,10 +218,10 @@ private[typed] class ActorSystemImpl[-T](
   override def sendSystem(msg: SystemMessage): Unit = userGuardian.sendSystem(msg)
   override def isLocal: Boolean = true
 
-  def systemActorOf[U](behavior: Behavior[U], name: String)(implicit timeout: Timeout): Future[ActorRef[U]] = {
+  def systemActorOf[U](behavior: Behavior[U], name: String, dispatcher: DispatcherSelector, mailboxCapacity: Int)(implicit timeout: Timeout): Future[ActorRef[U]] = {
     import AskPattern._
     implicit val sched = scheduler
-    systemGuardian ? CreateSystemActor(behavior)
+    systemGuardian ? CreateSystemActor(behavior, dispatcher, mailboxCapacity)
   }
 
   def printTree: String = {

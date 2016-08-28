@@ -8,10 +8,11 @@ import akka.{ actor ⇒ a, event ⇒ e }
 import scala.concurrent._
 import com.typesafe.config.ConfigFactory
 import java.util.concurrent.ThreadFactory
+import akka.util.Timeout
 
 private[typed] class ActorSystemStub(val name: String)
-  extends ActorRef[Nothing](a.RootActorPath(a.Address("akka", name)) / "user")
-  with ActorSystem[Nothing] with ActorRefImpl[Nothing] {
+    extends ActorRef[Nothing](a.RootActorPath(a.Address("akka", name)) / "user")
+    with ActorSystem[Nothing] with ActorRefImpl[Nothing] {
 
   override val settings: a.ActorSystem.Settings = new a.ActorSystem.Settings(getClass.getClassLoader, ConfigFactory.empty, name)
 
@@ -32,9 +33,9 @@ private[typed] class ActorSystemStub(val name: String)
   }
 
   override def dynamicAccess: a.DynamicAccess = new a.ReflectiveDynamicAccess(getClass.getClassLoader)
-  override def eventStream: e.EventStream = new e.EventStream
+  override def eventStream: EventStream = new EventStreamImpl(true)(settings.LoggerStartTimeout)
   override def logFilter: e.LoggingFilter = throw new UnsupportedOperationException("no log filter")
-  override def log: e.LoggingAdapter = new e.BusLogging(eventStream, path.parent.toString, getClass)
+  override def log: e.LoggingAdapter = ??? // new e.BusLogging(eventStream, path.parent.toString, getClass)
   override def logConfiguration(): Unit = log.info(settings.toString)
 
   override def scheduler: a.Scheduler = throw new UnsupportedOperationException("no scheduler")
@@ -52,4 +53,9 @@ private[typed] class ActorSystemStub(val name: String)
   }
 
   override def printTree: String = "no tree for ActorSystemStub"
+
+  def systemActorOf[U](behavior: Behavior[U], name: String, dispatcher: DispatcherSelector, mailboxCapacity: Int)(implicit timeout: Timeout): Future[ActorRef[U]] = {
+    Future.failed(new UnsupportedOperationException("ActorSystemStub cannot create system actors"))
+  }
+
 }

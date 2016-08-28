@@ -4,9 +4,11 @@
 package akka.typed
 package adapter
 
-import akka.{ actor ⇒ a }
+import akka.{ actor ⇒ a, dispatch => d }
 import akka.dispatch.sysmsg
 import scala.concurrent.ExecutionContextExecutor
+import akka.util.Timeout
+import scala.concurrent.Future
 
 /**
  * Lightweight wrapper for presenting an untyped ActorSystem to a Behavior (via the context).
@@ -16,8 +18,8 @@ import scala.concurrent.ExecutionContextExecutor
  * most circumstances.
  */
 private[typed] class ActorSystemAdapter[-T](val untyped: a.ActorSystemImpl)
-  extends ActorRef[T](a.RootActorPath(a.Address("akka", untyped.name)) / "user")
-  with ActorSystem[T] with internal.ActorRefImpl[T] {
+    extends ActorRef[T](a.RootActorPath(a.Address("akka", untyped.name)) / "user")
+    with ActorSystem[T] with internal.ActorRefImpl[T] {
 
   // Members declared in akka.typed.ActorRef
   override def tell(msg: T): Unit = untyped.guardian ! msg
@@ -37,7 +39,7 @@ private[typed] class ActorSystemAdapter[-T](val untyped: a.ActorSystemImpl)
     override def shutdown(): Unit = () // there was no shutdown in untyped Akka
   }
   override def dynamicAccess: a.DynamicAccess = untyped.dynamicAccess
-  override def eventStream: akka.event.EventStream = untyped.eventStream
+  override def eventStream: EventStream = ???
   implicit override def executionContext: scala.concurrent.ExecutionContextExecutor = untyped.dispatcher
   override def log: akka.event.LoggingAdapter = untyped.log
   override def logConfiguration(): Unit = untyped.logConfiguration()
@@ -56,6 +58,17 @@ private[typed] class ActorSystemAdapter[-T](val untyped: a.ActorSystemImpl)
     untyped.terminate().map(t ⇒ Terminated(ActorRefAdapter(t.actor))(null))(sameThreadExecutionContext)
   override lazy val whenTerminated: scala.concurrent.Future[akka.typed.Terminated] =
     untyped.whenTerminated.map(t ⇒ Terminated(ActorRefAdapter(t.actor))(null))(sameThreadExecutionContext)
+
+  def systemActorOf[U](behavior: Behavior[U], name: String, selector: DispatcherSelector, mailboxCapacity: Int)(implicit timeout: Timeout): Future[ActorRef[U]] = {
+    val dispatcher = selector match {
+      case DispatcherDefault                 ⇒ d.Dispatchers.DefaultDispatcherId
+      case DispatcherFromConfig(str)         ⇒ str
+      case DispatcherFromExecutionContext(_) ⇒ throw new UnsupportedOperationException("cannot use DispatcherFromExecutionContext with ActorSystemAdapter")
+      case DispatcherFromExecutor(_)         ⇒ throw new UnsupportedOperationException("cannot use DispatcherFromExecutor with ActorSystemAdapter")
+    }
+    val ref = untyped.systemActorOf(PropsAdapter(behavior).withDispatcher(dispatcher), name)
+    Future.successful(ref)
+  }
 
 }
 

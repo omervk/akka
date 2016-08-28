@@ -3,6 +3,8 @@
  */
 package akka.typed
 
+import akka.event.Logging.{ LogEvent, LogLevel }
+
 /**
  * An EventStream allows actors to register for certain message types, including
  * their subtypes automatically. Publishing events will broadcast them to all
@@ -33,4 +35,23 @@ trait EventStream {
    */
   def publish[T](event: T): Unit
 
+  /**
+   * Query the current minimum log level.
+   */
+  def logLevel: LogLevel
+
+  /**
+   * Change the current minimum log level.
+   */
+  def setLogLevel(loglevel: LogLevel): Unit
+}
+
+abstract class Logger {
+  def initialBehavior: Behavior[Logger.Command]
+}
+
+object Logger {
+  sealed trait Command
+  case class Initialize(eventStream: EventStream, replyTo: ActorRef[ActorRef[LogEvent]]) extends Command
+  // FIXME add Mute/Unmute (i.e. the TestEventListener functionality)
 }
