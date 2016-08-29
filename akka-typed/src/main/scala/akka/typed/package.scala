@@ -1,6 +1,8 @@
-package akka.typed
+package akka
 
-package object internal {
+import akka.typed.internal.ActorRefImpl
+
+package object typed {
   /*
    * These are safe due to the self-type of ActorRef
    */

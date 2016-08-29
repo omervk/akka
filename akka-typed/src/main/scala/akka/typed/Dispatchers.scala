@@ -7,7 +7,12 @@ import scala.concurrent.{ ExecutionContext, ExecutionContextExecutor }
 import java.util.concurrent.{ Executor, Executors }
 import akka.event.LoggingAdapter
 
-sealed trait DispatcherSelector
+sealed trait DispatcherSelectorOption
+
+case object DispatcherInherited extends DispatcherSelectorOption
+
+sealed trait DispatcherSelector extends DispatcherSelectorOption
+
 case object DispatcherDefault extends DispatcherSelector
 final case class DispatcherFromConfig(path: String) extends DispatcherSelector
 final case class DispatcherFromExecutor(executor: Executor) extends DispatcherSelector

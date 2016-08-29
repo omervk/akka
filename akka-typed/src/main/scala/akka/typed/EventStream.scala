@@ -3,7 +3,7 @@
  */
 package akka.typed
 
-import akka.event.Logging.{ LogEvent, LogLevel }
+import akka.event.Logging.{ LogEvent, LogLevel, StdOutLogger }
 
 /**
  * An EventStream allows actors to register for certain message types, including
@@ -54,4 +54,20 @@ object Logger {
   sealed trait Command
   case class Initialize(eventStream: EventStream, replyTo: ActorRef[ActorRef[LogEvent]]) extends Command
   // FIXME add Mute/Unmute (i.e. the TestEventListener functionality)
+}
+
+class DefaultLogger extends Logger with StdOutLogger {
+  import ScalaDSL._
+  import Logger._
+
+  val initialBehavior =
+    ContextAware[Command] { ctx =>
+      Total {
+        case Initialize(eventStream, replyTo) =>
+          val log = ctx.spawn(Static[LogEvent](print), "logger")
+          ctx.watch(log) // sign death pact
+          replyTo ! log
+          Empty
+      }
+    }
 }

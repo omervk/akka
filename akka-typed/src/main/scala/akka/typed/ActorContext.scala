@@ -62,12 +62,12 @@ trait ActorContext[T] {
    * Create a child Actor from the given [[Props]] under a randomly chosen name.
    * It is good practice to name Actors wherever practical.
    */
-  def spawnAnonymous[U](behavior: Behavior[U], dispatcher: DispatcherSelector = DispatcherDefault, mailboxCapacity: Int = 1000000): ActorRef[U]
+  def spawnAnonymous[U](behavior: Behavior[U], dispatcher: DispatcherSelectorOption = DispatcherInherited, mailboxCapacity: Int = 1000000): ActorRef[U]
 
   /**
    * Create a child Actor from the given [[Props]] and with the given name.
    */
-  def spawn[U](behavior: Behavior[U], name: String, dispatcher: DispatcherSelector = DispatcherDefault, mailboxCapacity: Int = 1000000): ActorRef[U]
+  def spawn[U](behavior: Behavior[U], name: String, dispatcher: DispatcherSelectorOption = DispatcherInherited, mailboxCapacity: Int = 1000000): ActorRef[U]
 
   /**
    * Force the child Actor under the given name to terminate after it finishes
@@ -135,9 +135,9 @@ trait ActorContext[T] {
  * See [[EffectfulActorContext]] for more advanced uses.
  */
 class StubbedActorContext[T](
-  val name:                     String,
-  override val mailboxCapacity: Int,
-  override val system:          ActorSystem[Nothing]) extends ActorContext[T] {
+    val name: String,
+    override val mailboxCapacity: Int,
+    override val system: ActorSystem[Nothing]) extends ActorContext[T] {
 
   val inbox = Inbox[T](name)
   override val self = inbox.ref
