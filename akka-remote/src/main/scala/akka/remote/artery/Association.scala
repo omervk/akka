@@ -43,13 +43,28 @@ import akka.util.OptionVal
 import org.agrona.concurrent.ManyToOneConcurrentArrayQueue
 import akka.remote.artery.compress.CompressionProtocol._
 import akka.stream.scaladsl.MergeHub
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * INTERNAL API
  */
 private[remote] object Association {
-  final case class QueueWrapper(queue: Queue[OutboundEnvelope]) extends SendQueue.ProducerApi[OutboundEnvelope] {
+  sealed trait QueueWrapper extends SendQueue.ProducerApi[OutboundEnvelope] {
+    def queue: Queue[OutboundEnvelope]
+  }
+
+  final case class QueueWrapperImpl(queue: Queue[OutboundEnvelope]) extends QueueWrapper {
     override def offer(message: OutboundEnvelope): Boolean = queue.offer(message)
+  }
+
+  final case class LazyQueueWrapper(queue: Queue[OutboundEnvelope], materialize: () ⇒ Unit) extends QueueWrapper {
+    private val onlyOnce = new AtomicBoolean
+
+    override def offer(message: OutboundEnvelope): Boolean = {
+      if (onlyOnce.compareAndSet(false, true))
+        materialize()
+      queue.offer(message)
+    }
   }
 
   final val ControlQueueIndex = 0
@@ -93,10 +108,10 @@ private[remote] class Association(
   private val largeQueueSize = 256
 
   private[this] val queues: Array[SendQueue.ProducerApi[OutboundEnvelope]] = Array.ofDim(2 + outboundLanes)
-  queues(ControlQueueIndex) = QueueWrapper(createQueue(controlQueueSize)) // control stream
-  queues(LargeQueueIndex) = QueueWrapper(createQueue(largeQueueSize)) // large messages stream
+  queues(ControlQueueIndex) = QueueWrapperImpl(createQueue(controlQueueSize)) // control stream
+  queues(LargeQueueIndex) = QueueWrapperImpl(createQueue(largeQueueSize)) // large messages stream
   (0 until outboundLanes).foreach { i ⇒
-    queues(OrdinaryQueueIndex + i) = QueueWrapper(createQueue(queueSize)) // ordinary messages stream
+    queues(OrdinaryQueueIndex + i) = QueueWrapperImpl(createQueue(queueSize)) // ordinary messages stream
   }
   @volatile private[this] var queuesVisibility = false
 
@@ -388,13 +403,8 @@ private[remote] class Association(
     queuesVisibility = true // volatile write for visibility of the queues array
     _outboundControlIngress = control
     materializing.countDown()
-    attachStreamRestart("Outbound control stream", completed, cause ⇒ {
-      runOutboundControlStream()
-      cause match {
-        case _: HandshakeTimeoutException ⇒ // ok, quarantine not possible without UID
-        case _                            ⇒ quarantine("Outbound control stream restarted")
-      }
-    })
+    attachStreamRestart("Outbound control stream", ControlQueueIndex, controlQueueSize,
+      completed, () ⇒ runOutboundControlStream())
   }
 
   private def getOrCreateQueueWrapper(queueIndex: Int, capacity: Int): QueueWrapper = {
@@ -403,7 +413,7 @@ private[remote] class Association(
       case existing: QueueWrapper ⇒ existing
       case _ ⇒
         // use new queue for restarts
-        QueueWrapper(createQueue(capacity))
+        QueueWrapperImpl(createQueue(capacity))
     }
   }
 
@@ -429,7 +439,8 @@ private[remote] class Association(
       queuesVisibility = true // volatile write for visibility of the queues array
       changeOutboundCompression = Some(Vector(changeCompression))
 
-      attachStreamRestart("Outbound message stream", completed, _ ⇒ runOutboundOrdinaryMessagesStream())
+      attachStreamRestart("Outbound message stream", OrdinaryQueueIndex, queueSize,
+        completed, () ⇒ runOutboundOrdinaryMessagesStream())
 
     } else {
       val wrappers = (0 until outboundLanes).map { i ⇒
@@ -473,7 +484,8 @@ private[remote] class Association(
 
       changeOutboundCompression = Some(changeCompressionValues)
 
-      attachStreamRestart("Outbound message stream", completed, _ ⇒ runOutboundOrdinaryMessagesStream())
+      attachStreamRestart("Outbound message stream", OrdinaryQueueIndex, queueSize,
+        completed, () ⇒ runOutboundOrdinaryMessagesStream())
     }
   }
 
@@ -494,10 +506,20 @@ private[remote] class Association(
     // replace with the materialized value, still same underlying queue
     queues(LargeQueueIndex) = queueValue
     queuesVisibility = true // volatile write for visibility of the queues array
-    attachStreamRestart("Outbound large message stream", completed, _ ⇒ runOutboundLargeMessagesStream())
+    val t = (t: Throwable) ⇒ ()
+    attachStreamRestart("Outbound large message stream", LargeQueueIndex, largeQueueSize,
+      completed, () ⇒ runOutboundLargeMessagesStream())
   }
 
-  private def attachStreamRestart(streamName: String, streamCompleted: Future[Done], restart: Throwable ⇒ Unit): Unit = {
+  private def attachStreamRestart(streamName: String, queueIndex: Int, queueCapacity: Int,
+                                  streamCompleted: Future[Done], restart: () ⇒ Unit): Unit = {
+
+    def lazyRestart(): Unit = {
+      // LazyQueueWrapper will invoke the `restart` function when first message is offered
+      queues(queueIndex) = LazyQueueWrapper(createQueue(queueCapacity), restart)
+      queuesVisibility = true // volatile write for visibility of the queues array
+    }
+
     implicit val ec = materializer.executionContext
     streamCompleted.onFailure {
       case _ if transport.isShutdown     ⇒ // don't restart after shutdown
@@ -505,14 +527,22 @@ private[remote] class Association(
       case cause: GaveUpSendingException ⇒
         log.debug("{} to {} failed. Restarting it. {}", streamName, remoteAddress, cause.getMessage)
         // restart unconditionally, without counting restarts
-        restart(cause)
+        lazyRestart()
       case cause ⇒
         if (restartCounter.restart()) {
           log.error(cause, "{} to {} failed. Restarting it. {}", streamName, remoteAddress, cause.getMessage)
-          restart(cause)
+          lazyRestart()
         } else {
           log.error(cause, s"{} to {} failed and restarted {} times within {} seconds. Terminating system. ${cause.getMessage}",
             streamName, remoteAddress, transport.settings.Advanced.OutboundMaxRestarts, transport.settings.Advanced.OutboundRestartTimeout.toSeconds)
+          if (queueIndex == ControlQueueIndex) {
+            cause match {
+              case _: HandshakeTimeoutException ⇒ // ok, quarantine not possible without UID
+              case _                            ⇒ quarantine("Outbound control stream restarted")
+            }
+          }
+
+          // FIXME is this the right thing to do for outbound?
           transport.system.terminate()
         }
     }
